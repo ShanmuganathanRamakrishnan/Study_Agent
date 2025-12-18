@@ -67,3 +67,13 @@ desktop.ini
 .env
 .env.local
 *.env
+
+# Project-specific (local artifacts, not for git)
+CLAUDE.md
+questions.txt
+rag_validation_report.txt
+stress_test_report.md
+evaluation_report.md
+evaluation_results.json
+study_guide.md
+output.log

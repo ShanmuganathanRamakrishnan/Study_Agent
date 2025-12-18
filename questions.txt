@@ -1,3 +1,0 @@
-1. According to the text, what specific definition does entropy have in the context of classical thermodynamics?
-2. How does the text describe the relationship between entropy and reversible change in heat in a closed thermodynamic system?
-3. According to the text, what is the relationship between entropy and the temperature of a thermodynamic system?
