@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Model Cache (Large files - do not push)
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.gguf
+
+# HuggingFace Cache
+.cache/
+~/.cache/huggingface/
+
+# Logs and temporary files
+*.log
+rejections.log
+*.tmp
+*.temp
+
+# Generated outputs (optional - can be regenerated)
+study_guide.md
+evaluation_results.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local environment
+.env
+.env.local
+*.env
