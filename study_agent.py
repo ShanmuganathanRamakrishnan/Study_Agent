@@ -68,18 +68,48 @@ class RAGSystem:
         Splits text into chunks respecting sentence boundaries.
         Prepends [DOMAIN_TAG] to each chunk.
         Hard splits sentences > CHUNK_SIZE_WORDS.
+        
+        INVARIANTS (fail-fast if violated):
+        - Progress: i must advance at least every 2 iterations
+        - Bounded: chunks <= sentences * 2 (generous)
+        - Time: O(n) where n = number of sentences
         """
         import re
+        
         # Split by sentence boundaries (keeping punctuation)
-        # Lookbehind for [.!?] followed by whitespace
         sentences = re.split(r'(?<=[.!?])\s+', text)
+        num_sentences = len(sentences)
+        
+        # Invariant bounds
+        MAX_ITERATIONS = num_sentences * 3  # O(n) guarantee
+        MAX_CHUNKS = num_sentences * 2  # Bounded output
         
         chunks = []
         current_chunk_sentences = []
         current_word_count = 0
         
+        # Progress tracking for invariant checks
+        iteration_count = 0
+        last_i = -1
+        stall_count = 0
+        
         i = 0
-        while i < len(sentences):
+        while i < num_sentences:
+            iteration_count += 1
+            
+            # INVARIANT 1: O(n) time - fail fast if exceeded
+            if iteration_count > MAX_ITERATIONS:
+                raise RuntimeError(f"[CHUNKING] INVARIANT VIOLATED: Exceeded {MAX_ITERATIONS} iterations at sentence {i}/{num_sentences}")
+            
+            # INVARIANT 2: Progress check - i must advance
+            if i == last_i:
+                stall_count += 1
+                if stall_count > 1:
+                    raise RuntimeError(f"[CHUNKING] INVARIANT VIOLATED: Stalled at sentence {i} for {stall_count} iterations")
+            else:
+                stall_count = 0
+                last_i = i
+            
             sentence = sentences[i].strip()
             if not sentence:
                 i += 1
@@ -87,48 +117,42 @@ class RAGSystem:
                 
             sent_word_count = len(sentence.split())
             
-            # Giant sentence handling
+            # Giant sentence handling (sentence alone > chunk_size)
             if sent_word_count > self.chunk_size:
-                print(f"WARNING: Force-split giant sentence of {sent_word_count} words.")
-                # Force split the giant sentence
+                # Force split and ALWAYS advance
                 words = sentence.split()
-                # If we have accumulated context, emit it first
                 if current_chunk_sentences:
                     chunk_content = " ".join(current_chunk_sentences)
                     chunks.append(f"[{domain_tag}] {chunk_content}")
                     current_chunk_sentences = []
                     current_word_count = 0
                 
-                # Split giant sentence into chunks
                 for j in range(0, sent_word_count, self.chunk_size):
                     sub_words = words[j : j + self.chunk_size]
                     sub_text = " ".join(sub_words)
                     chunks.append(f"[{domain_tag}] {sub_text}")
                 
-                i += 1
+                i += 1  # GUARANTEED PROGRESS
                 continue
             
-            # Normal handling
+            # Normal handling: sentence fits within chunk_size
             if current_word_count + sent_word_count <= self.chunk_size:
                 current_chunk_sentences.append(sentence)
                 current_word_count += sent_word_count
-                i += 1
+                i += 1  # GUARANTEED PROGRESS
             else:
                 # Chunk is full, emit it
-                chunk_content = " ".join(current_chunk_sentences)
-                chunks.append(f"[{domain_tag}] {chunk_content}")
+                if current_chunk_sentences:
+                    chunk_content = " ".join(current_chunk_sentences)
+                    chunks.append(f"[{domain_tag}] {chunk_content}")
                 
-                # Sliding window logic for overlap
-                # Remove sentences from the beginning until we have room for overlap
-                # We want to keep approx 'chunk_overlap' words
+                # INVARIANT 3: Bounded chunks
+                if len(chunks) > MAX_CHUNKS:
+                    raise RuntimeError(f"[CHUNKING] INVARIANT VIOLATED: Exceeded {MAX_CHUNKS} chunks")
                 
-                # Actually, simpler sliding window:
-                # We want the NEW chunk to start with context from the end of the OLD chunk.
-                # So we keep sentences from the end of current_chunk_sentences
-                
+                # Sliding window for overlap
                 overlap_buffer = []
                 overlap_count = 0
-                # Iterate backwards
                 for s in reversed(current_chunk_sentences):
                     s_len = len(s.split())
                     if overlap_count + s_len <= self.chunk_overlap:
@@ -137,10 +161,15 @@ class RAGSystem:
                     else:
                         break
                 
-                current_chunk_sentences = overlap_buffer
-                current_word_count = overlap_count
-                
-                # Don't increment i, we try to add the current sentence again to the new buffer
+                # CRITICAL: Ensure sentence will fit after overlap
+                if overlap_count + sent_word_count > self.chunk_size:
+                    # Clear overlap to guarantee progress on next iteration
+                    current_chunk_sentences = []
+                    current_word_count = 0
+                else:
+                    current_chunk_sentences = overlap_buffer
+                    current_word_count = overlap_count
+                # Note: i not incremented - sentence will be added on next iteration
         
         # Emit remaining
         if current_chunk_sentences:
@@ -164,6 +193,120 @@ class RAGSystem:
         print(f"Total chunks created: {len(self.chunks)}")
         print("Creating embeddings...")
         self.embeddings = self.model.encode(self.chunks, convert_to_tensor=True)
+    
+    def add_document(self, domain: str, text: str) -> int:
+        """
+        Incrementally add a single document without re-indexing existing content.
+        
+        Args:
+            domain: Domain tag for the document (e.g., "PHYSICS", "BIOLOGY")
+            text: Full text content of the document
+            
+        Returns:
+            Number of new chunks created
+            
+        Note: This method ONLY embeds the new chunks, not existing ones.
+        """
+        import torch
+        import time
+        
+        # Defensive constants (not domain-specific)
+        MAX_CHUNK_WORDS = 500  # Skip chunks longer than this
+        EMBEDDING_BATCH_SIZE = 32  # Embed in batches for progress visibility
+        
+        start_time = time.time()
+        existing_chunk_count = len(self.chunks)
+        print(f"[ADD_DOCUMENT] === Starting for {domain} ===", flush=True)
+        print(f"[ADD_DOCUMENT] Existing chunks: {existing_chunk_count}", flush=True)
+        print(f"[ADD_DOCUMENT] Input text length: {len(text)} chars, {len(text.split())} words", flush=True)
+        
+        # Remove any existing chunks for this domain (allows re-upload/update)
+        self.chunks = [c for c in self.chunks if not c.startswith(f"[{domain}]")]
+        removed_count = existing_chunk_count - len(self.chunks)
+        if removed_count > 0:
+            print(f"[ADD_DOCUMENT] Removed {removed_count} existing chunks for {domain}", flush=True)
+            # Rebuild embeddings without removed chunks
+            if self.chunks:
+                print(f"[ADD_DOCUMENT] Rebuilding embeddings for {len(self.chunks)} remaining chunks...", flush=True)
+                rebuild_start = time.time()
+                self.embeddings = self.model.encode(self.chunks, convert_to_tensor=True)
+                print(f"[ADD_DOCUMENT] Rebuild complete in {time.time() - rebuild_start:.1f}s", flush=True)
+            else:
+                self.embeddings = None
+        
+        # Chunk the new document
+        print(f"[ADD_DOCUMENT] Chunking {domain}...", flush=True)
+        chunk_start = time.time()
+        raw_chunks = self.chunk_text_sentence_aware(text, domain)
+        print(f"[ADD_DOCUMENT] Chunking complete in {time.time() - chunk_start:.1f}s, raw chunks: {len(raw_chunks)}", flush=True)
+        
+        # Defensive validation: filter invalid chunks
+        valid_chunks = []
+        skipped_empty = 0
+        skipped_long = 0
+        
+        for chunk in raw_chunks:
+            # Skip empty chunks
+            if not chunk or not chunk.strip():
+                skipped_empty += 1
+                continue
+            
+            # Skip excessively long chunks (pathological input)
+            word_count = len(chunk.split())
+            if word_count > MAX_CHUNK_WORDS:
+                print(f"[ADD_DOCUMENT] WARNING: Skipping chunk with {word_count} words (max {MAX_CHUNK_WORDS})", flush=True)
+                skipped_long += 1
+                continue
+            
+            valid_chunks.append(chunk)
+        
+        if skipped_empty > 0 or skipped_long > 0:
+            print(f"[ADD_DOCUMENT] Filtered: {skipped_empty} empty, {skipped_long} too long", flush=True)
+        
+        new_chunk_count = len(valid_chunks)
+        print(f"[ADD_DOCUMENT] Valid chunks to embed: {new_chunk_count}", flush=True)
+        
+        if new_chunk_count == 0:
+            print(f"[ADD_DOCUMENT] WARNING: No valid chunks created for {domain}", flush=True)
+            return 0
+        
+        # Embed in batches with progress logging
+        print(f"[ADD_DOCUMENT] Embedding {new_chunk_count} chunks in batches of {EMBEDDING_BATCH_SIZE}...", flush=True)
+        embed_start = time.time()
+        
+        all_embeddings = []
+        for i in range(0, new_chunk_count, EMBEDDING_BATCH_SIZE):
+            batch = valid_chunks[i:i + EMBEDDING_BATCH_SIZE]
+            batch_num = (i // EMBEDDING_BATCH_SIZE) + 1
+            total_batches = (new_chunk_count + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
+            
+            print(f"[ADD_DOCUMENT] Embedding batch {batch_num}/{total_batches} ({len(batch)} chunks)...", flush=True)
+            batch_start = time.time()
+            
+            batch_embeddings = self.model.encode(batch, convert_to_tensor=True)
+            all_embeddings.append(batch_embeddings)
+            
+            print(f"[ADD_DOCUMENT] Batch {batch_num} complete in {time.time() - batch_start:.1f}s", flush=True)
+        
+        # Concatenate all batch embeddings
+        if len(all_embeddings) == 1:
+            new_embeddings = all_embeddings[0]
+        else:
+            new_embeddings = torch.cat(all_embeddings, dim=0)
+        
+        print(f"[ADD_DOCUMENT] All embeddings complete in {time.time() - embed_start:.1f}s", flush=True)
+        
+        # Append to existing
+        self.chunks.extend(valid_chunks)
+        
+        if self.embeddings is not None and len(self.embeddings) > 0:
+            self.embeddings = torch.cat([self.embeddings, new_embeddings], dim=0)
+        else:
+            self.embeddings = new_embeddings
+        
+        total_time = time.time() - start_time
+        print(f"[ADD_DOCUMENT] === Complete: {new_chunk_count} chunks, {len(self.chunks)} total, {total_time:.1f}s ===", flush=True)
+        return new_chunk_count
         
     def retrieve_with_confidence(self, query, top_k=2, confidence_threshold=0.05):
         """
@@ -394,20 +537,38 @@ def generate_solution(tokenizer, model, text, question, confidence="HIGH"):
     print(f"Generating solution for: {question[:50]}... (Confidence: {confidence})")
     
     if confidence == "HIGH":
-        system_prompt = """You are a strict tutor.
-1. Answer the question using ONLY the provided source text.
-2. Output ONLY the Answer and the Supporting Quote.
-3. The Answer must be a **complete, grammatically correct sentence**. Do not use fragments.
-4. If the text mentions the subject but does not contain the specific information requested (e.g., a definition), output exactly: "The provided text does not contain this information." """
+        system_prompt = """You are a strict academic tutor. Your role is to explain concepts clearly and concisely.
+
+RULES:
+1. Answer using ONLY the provided source text.
+2. Structure your response with:
+   - Definition (1-2 sentences)
+   - Formula (if present in source, use exact notation)
+   - Simple Example (if present in source)
+   - Intuition (1-2 sentences explaining the concept)
+3. Maximum 6 sentences total.
+4. Do NOT invent formulas or examples not in the source.
+5. Do NOT repeat phrases or sentences.
+6. If the source lacks required information, output exactly: "The provided text does not contain this information."
+
+OUTPUT FORMAT:
+**Answer:** [Your structured explanation]
+**Quote:** "[Exact supporting quote from source]" """
     else:
         # LOW confidence: stricter mode
-        system_prompt = """You are a strict tutor operating in LOW CONFIDENCE mode.
-1. Answer the question using ONLY the provided source text.
-2. Do NOT synthesize information across different domain sections (marked with [DOMAIN] tags).
-3. Do NOT make cross-domain assumptions.
-4. If the text contains multiple domain sections, answer using ONLY the most relevant one.
-5. If unsure, output exactly: "The provided text contains ambiguous information from multiple domains. Cannot provide a confident answer."
-6. Output ONLY the Answer and the Supporting Quote."""
+        system_prompt = """You are a strict academic tutor in LOW CONFIDENCE mode.
+
+RULES:
+1. Answer using ONLY the provided source text.
+2. Do NOT synthesize across different [DOMAIN] sections.
+3. Keep answer concise (max 4 sentences).
+4. Do NOT invent information not in the source.
+5. Do NOT repeat phrases.
+6. If unsure, output exactly: "The provided text does not contain sufficient information to answer this question."
+
+OUTPUT FORMAT:
+**Answer:** [Brief answer]
+**Quote:** "[Exact quote from source]" """
 
     user_prompt = f"""=== SOURCE TEXT BEGIN ===
 {text}
@@ -415,12 +576,7 @@ def generate_solution(tokenizer, model, text, question, confidence="HIGH"):
 
 Question: {question}
 
-Instructions:
-1. Locate the specific sentence that answers the question.
-2. Output format:
-**Answer:** [Direct Answer]
-**Quote:** "[Exact quote from text]"
-"""
+Provide a clear, structured explanation based ONLY on the source text above."""
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -439,8 +595,9 @@ Instructions:
             input_ids=inputs.input_ids,
             attention_mask=inputs.attention_mask,
             pad_token_id=tokenizer.pad_token_id,
-            max_new_tokens=256,
+            max_new_tokens=300,  # Slightly more for structured output
             do_sample=False,
+            repetition_penalty=1.2,  # Prevent repetition/degeneration
         )
     
     response = outputs[0][inputs.input_ids.shape[-1]:]

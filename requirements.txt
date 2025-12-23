@@ -1,0 +1,20 @@
+# Lucent Study Agent - Backend Dependencies
+# GPU Build
+
+# Core Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# ML / Torch (CUDA)
+torch>=2.1.0
+transformers>=4.36.0
+accelerate>=0.25.0
+bitsandbytes>=0.41.0
+sentence-transformers>=2.2.0
+
+# PDF Processing
+pdfplumber>=0.10.0
+
+# Utils
+python-multipart>=0.0.6

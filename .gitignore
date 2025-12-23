@@ -1,3 +1,5 @@
+# Lucent - Git Ignore Configuration
+
 # Python
 __pycache__/
 *.py[cod]
@@ -6,6 +8,15 @@ __pycache__/
 .Python
 build/
 develop-eggs/
+
+# Test folders and outputs
+Test_folder/
+evaluation_results.json
+questions.txt
+rag_validation_report.txt
+study_guide.md
+stress_test_report.md
+evaluation_report.md
 dist/
 downloads/
 eggs/
@@ -20,11 +31,11 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
+# Virtual environments
+.venv/
 venv/
 ENV/
 env/
-.venv/
 
 # IDE
 .vscode/
@@ -33,47 +44,52 @@ env/
 *.swo
 *~
 
-# Jupyter Notebooks
-.ipynb_checkpoints/
+# Environment variables
+.env
+.env.local
+.env.*.local
 
-# Model Cache (Large files - do not push)
-*.pt
-*.pth
-*.bin
-*.safetensors
-*.onnx
-*.gguf
-
-# HuggingFace Cache
+# HuggingFace cache
 .cache/
-~/.cache/huggingface/
+*.cache/
+huggingface/
 
-# Logs and temporary files
-*.log
-rejections.log
-*.tmp
-*.temp
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Generated outputs (optional - can be regenerated)
-study_guide.md
-evaluation_results.json
+# Build outputs
+ui/dist/
+*.egg-info/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
 
 # OS files
 .DS_Store
 Thumbs.db
-desktop.ini
+*.bak
 
-# Local environment
-.env
-.env.local
-*.env
+# Uploaded user files (if stored locally)
+uploads/
+user_uploads/
+temp/
+tmp/
 
-# Project-specific (local artifacts, not for git)
-CLAUDE.md
-questions.txt
-rag_validation_report.txt
-stress_test_report.md
-evaluation_report.md
-evaluation_results.json
-study_guide.md
-output.log
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Model weights (downloaded at runtime)
+*.bin
+*.safetensors
+*.gguf
+
+# Logs
+*.log
+logs/

@@ -17,24 +17,58 @@ The UI treats the Study Agent as a **black box**. All internal logic (RAG, thres
 
 ## Endpoints
 
-### 1. `ask_question(query: str)`
+### 1. `POST /ask_question`
 
-Ask a question about indexed study materials.
+Ask a question about indexed study materials.  
+**Returns structured JSON with no markdown in any field.**
 
-**Input:**
-```python
-query: str  # Natural language question
+**Request:**
+```json
+{ "query": "What is entropy in thermodynamics?" }
 ```
 
-**Output:**
-```python
+**Response Schema:**
+```json
 {
-    "status": "answered" | "refused",
-    "answer": str | None,
-    "supporting_quote": str | None,
+    "status": "ANSWERED" | "REFUSED" | "ERROR",
     "confidence": "HIGH" | "LOW",
-    "domain": str,  # e.g., "THERMODYNAMICS"
-    "refusal_reason": str | None
+    "domain": "THERMODYNAMICS",
+    "answer": "Plain text answer (no markdown)",
+    "quote": "Exact supporting quote or null",
+    "reason": "Reason for refusal (only if REFUSED)"
+}
+```
+
+**Frontend Rendering Contract:**
+| Field | Render As |
+|-------|-----------|
+| `answer` | Primary body text (high contrast) |
+| `quote` | Blockquote / code card (muted, italic) |
+| `confidence` | Badge (green=HIGH, blue=LOW) |
+| `domain` | Small label badge |
+| `reason` | Neutral system message (for REFUSED) |
+
+**Example: HIGH Confidence Answer**
+```json
+{
+    "status": "ANSWERED",
+    "confidence": "HIGH",
+    "domain": "THERMODYNAMICS",
+    "answer": "Entropy is the quotient of an infinitesimal amount of heat to the instantaneous temperature, developed by Rudolf Clausius in the 1850s.",
+    "quote": "Rudolf Clausius developed the thermodynamic definition of entropy in the early 1850s, defining it as the quotient of an infinitesimal amount of heat to the instantaneous temperature.",
+    "reason": null
+}
+```
+
+**Example: LOW Confidence Refusal**
+```json
+{
+    "status": "REFUSED",
+    "confidence": "LOW",
+    "domain": "",
+    "answer": null,
+    "quote": null,
+    "reason": "Query lacks semantic specificity"
 }
 ```
 
@@ -43,19 +77,8 @@ query: str  # Natural language question
 |--------|---------|
 | `"Query lacks semantic specificity"` | Vague query (≤4 words, no content) |
 | `"Low confidence - ambiguous retrieval"` | Score separation below threshold |
-| `"Query contains ambiguous cross-domain terms"` | Overlap vocabulary detected |
+| `"No relevant content found"` | No chunks match query |
 | `"The provided text does not contain this information"` | Information not in corpus |
-
-**Example:**
-```python
-# Successful answer
-ask_question("What is entropy in thermodynamics?")
-→ {"status": "answered", "answer": "Entropy is...", "confidence": "HIGH", ...}
-
-# Refusal
-ask_question("describe the process")
-→ {"status": "refused", "refusal_reason": "Query lacks semantic specificity", ...}
-```
 
 ---
 
